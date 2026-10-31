@@ -397,7 +397,6 @@ hr{border:0;border-top:1px solid var(--line);margin:12px 0}
       <option value="imagery">Satellite imagery</option>
       <option value="dark">Dark map</option>
     </select>
-
     <label for="radiusInput">Study radius (metres)</label>
     <input id="radiusInput" type="number" value="1000" min="100" max="20000">
     <button class="btn btn-light btn-block" onclick="enableRadiusMode()"><i class="fa-solid fa-bullseye"></i> Enable map-click radius</button>
@@ -664,6 +663,7 @@ const GAMBIA_CENTER = [13.4549,-16.5790];
 let map;
 let baseLayer = null;
 let boundaryLayer = null;
+let censusEALayer = null;
 let radiusLayer = null;
 let buildingLayer = null;
 
@@ -797,8 +797,7 @@ function initMap(){
     }
   });
 
-  window.addEventListener("resize",()=>{
-    setTimeout(()=>map.invalidateSize(true),150);
+  window.addEventListener("resize",()=>{    setTimeout(()=>map.invalidateSize(true),150);
   });
 
   setTimeout(()=>map.invalidateSize(true),300);
@@ -1197,8 +1196,7 @@ function clipBuildingToAOI(building,aoi){
       if(!turf.booleanIntersects(building,polygon))continue;
       const clipped=turf.intersect(turf.featureCollection([building,polygon]));
       if(clipped)intersections.push(clipped);
-    }catch(e){
-      // Invalid or topologically complex intersections are skipped.
+    }catch(e){      // Invalid or topologically complex intersections are skipped.
     }
   }
 
@@ -1465,10 +1463,96 @@ function downloadFigureGround(){
   link.click();
 }
 
+
+/* ------------------ GITHUB CENSUS EA GEOJSON ------------------ */
+/* Loads the national Enumeration Area polygons directly from the public repository. */
+const CENSUS_EA_GEOJSON_URL =
+  "https://raw.githubusercontent.com/silkysingz94-oss/Urban-Planning-Intelligence/main/Census_EAs_Geo.json";
+
+async function loadGitHubCensusBoundaries(){
+  setLoading(true,"Loading Gambia Enumeration Areas from GitHub...");
+  setMapStatus("Loading Census EA boundaries",false);
+
+  try{
+    const response=await fetch(CENSUS_EA_GEOJSON_URL,{
+      method:"GET",
+      headers:{"Accept":"application/geo+json, application/json"},
+      mode:"cors"
+    });
+
+    if(!response.ok){
+      throw new Error("GitHub returned HTTP "+response.status);
+    }
+
+    const data=await response.json();
+    const featureCollection=data.type==="FeatureCollection"
+      ? data
+      : data.type==="Feature"
+        ? {type:"FeatureCollection",features:[data]}
+        : null;
+
+    if(!featureCollection || !Array.isArray(featureCollection.features)){
+      throw new Error("The GitHub file is not a valid GeoJSON FeatureCollection.");
+    }
+
+    const validFeatures=featureCollection.features.filter(feature=>
+      feature && feature.geometry &&
+      ["Polygon","MultiPolygon"].includes(feature.geometry.type)
+    );
+
+    if(!validFeatures.length){
+      throw new Error("The GeoJSON contains no valid polygon or multipolygon features.");
+    }
+
+    adminData={type:"FeatureCollection",features:validFeatures};
+
+    if(censusEALayer && map.hasLayer(censusEALayer)){
+      map.removeLayer(censusEALayer);
+    }
+
+    censusEALayer=L.geoJSON(adminData,{
+      renderer:L.canvas(),
+      interactive:false,
+      style:{
+        color:"#2477bd",
+        weight:0.45,
+        opacity:0.78,
+        fillColor:"#5da5d8",
+        fillOpacity:0.025
+      }
+    }).addTo(map);
+
+    populateAdminSelectors();
+
+    const bounds=censusEALayer.getBounds();
+    if(bounds.isValid()){
+      map.fitBounds(bounds,{padding:[18,18],maxZoom:10});
+    }
+
+    $("buildingStatus").textContent="EA boundaries: "+validFeatures.length.toLocaleString();
+    $("analysisOutput").textContent=
+      "Gambia Enumeration Area boundaries loaded directly from GitHub ("+
+      validFeatures.length.toLocaleString()+" polygon features). Select an LGA, district or ward to define the analysis area.";
+
+    setMapStatus("Census EA boundaries loaded");
+    updateAOIStatus();
+    updateStats();
+
+  }catch(error){
+    console.error("GitHub Census EA GeoJSON load failed:",error);
+    setMapStatus("Census EA data unavailable",false);
+    $("analysisOutput").textContent=
+      "Could not load Census_EAs_Geo.json from GitHub: "+error.message+
+      ". Confirm that the repository is public and the file is committed at the repository root.";
+  }finally{
+    setLoading(false);
+  }
+}
+
 /* ------------------ STARTUP ------------------ */
 
 initMap();
-
+loadGitHubCensusBoundaries();
 </script>
 </body>
 </html>
